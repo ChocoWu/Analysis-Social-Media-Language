@@ -24,6 +24,30 @@ RE_PERCENTAGE = RE_NUM + "%"
 RE_WORD = r'[a-zA-Z]+'
 RE_WHITESPACE = r'\s+'
 RE_ANY = r'.'
+RE_PUNCT = r'[\.\,\"\(\)\!\?\:]+'
+RE_PHONE = r'(?<![0-9])(?:\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?![0-9])'
+RE_MONEY = r"(?:[$€£¢]\d+(?:[\.,']\d+)?(?:[MmKkBb](?:n|(?:il(?:lion)?))?)?)|(?:\d+(?:[\.,']\d+)?[$€£¢])"
+
+
+__short_date = r"(?:\b(?<!\d\.)(?:(?:(?:[0123]?[0-9][\.\-\/])?[0123]?[0-9][\.\-\/][12][0-9]{3})|(?:[0123]?[0-9][\.\-\/][0123]?[0-9][\.\-\/][12]?[0-9]{2,3}))(?!\.\d)\b)"
+__full_date_parts = [
+    # prefix
+    r"(?:(?<!:)\b\'?\d{1,4},? ?)",
+
+    # month names
+    r"\b(?:[Jj]an(?:uary)?|[Ff]eb(?:ruary)?|[Mm]ar(?:ch)?|[Aa]pr(?:il)?|May|[Jj]un(?:e)?|[Jj]ul(?:y)?|[Aa]ug(?:ust)?|[Ss]ept?(?:ember)?|[Oo]ct(?:ober)?|[Nn]ov(?:ember)?|[Dd]ec(?:ember)?)\b",
+
+    # suffix
+    r"(?:(?:,? ?\'?)?\d{1,4}(?:st|nd|rd|n?th)?\b(?:[,\/]? ?\'?\d{2,4}[a-zA-Z]*)?(?: ?- ?\d{2,4}[a-zA-Z]*)?(?!:\d{1,4})\b)",
+]
+__fd1 = "(?:{})".format("".join(
+    [__full_date_parts[0] + "?", __full_date_parts[1], __full_date_parts[2]]))
+__fd2 = "(?:{})".format("".join(
+    [__full_date_parts[0], __full_date_parts[1], __full_date_parts[2] + "?"]))
+__date = "(?:" + "(?:" + __fd1 + "|" + __fd2 + ")" + "|" + __short_date + ")"
+
+RE_DATE = __date
+RE_TIME = r"(?:(?:\d+)?\.?\d+(?:AM|PM|am|pm|a\.m\.|p\.m\.))|(?:(?:[0-2]?[0-9]|[2][0-3]):(?:[0-5][0-9])(?::(?:[0-5][0-9]))?(?: ?(?:AM|PM|am|pm|a\.m\.|p\.m\.))?)"
 
 # Combined words such as 'red-haired' or 'CUSTOM_TOKEN'
 RE_COMB = r'[a-zA-Z]+[-_][a-zA-Z]+'
@@ -159,5 +183,9 @@ def tokenize(text):
 
 
 if __name__ == '__main__':
-    text = "＼(^o^)／ 50,000/day HaaaHaaaahaaaaa FUCCCCK "
-    print(tokenize(text))
+    import pandas as pd
+    df = pd.read_csv('test.csv', names=['src', 'tgt'])
+    print(re.sub(RE_PUNCT, '', df['src'][0]))
+    print(re.sub(RE_PUNCT, '', df['tgt'][0]))
+    # text = ""Lmao nigga was selling a walker , only on 125th URL""
+    # print(tokenize(text))

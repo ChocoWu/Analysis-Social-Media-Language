@@ -6,7 +6,7 @@ import random
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dir', help="data directory", default="../data")
-parser.add_argument('--max-len', help="max sequence length", default=10)
+parser.add_argument('--max-len', help="max sequence length", default=20)
 args = parser.parse_args()
 
 
