@@ -12,9 +12,11 @@ import torch
 import torchtext
 from torch import optim
 import torch.nn as nn
+from sklearn.metrics import classification_report
+from sklearn import metrics
 
 import seq2seq
-from seq2seq.evaluator.evaluator import Evaluator
+from seq2seq.evaluator.multi_task_evaluator import Evaluator
 from seq2seq.loss.loss import NLLLoss
 from seq2seq.optim.optim import Optimizer
 from seq2seq.util.checkpoint import Checkpoint
@@ -67,12 +69,11 @@ class MultiTaskTrainer(object):
             batch_size = target_variable.size(0)
             loss.eval_batch(step_output.contiguous().view(batch_size, -1), target_variable[:, step + 1])
         # Backward propagation
-        print(class_result.size())
-        print(class_output.size())
-        c_loss = torch.mean(self.class_loss(torch.argmax(class_result, dim=1, keepdim=True), class_output-2))
-        loss = c_loss + loss
+        c_loss = self.class_loss(class_result[0], (class_output-2).squeeze(1))
+        # print(loss.acc_loss())
+        total_loss = c_loss + loss.acc_loss
         model.zero_grad()
-        loss.backward()
+        total_loss.backward()
         self.optimizer.step()
 
         return loss.get_loss() + c_loss.cpu().item()
@@ -152,12 +153,14 @@ class MultiTaskTrainer(object):
                     log.info(log_msg)
 
                 # Checkpoint
-                if step % self.checkpoint_every == 0 or step == total_steps:
-                    Checkpoint(model=model,
-                               optimizer=self.optimizer,
-                               epoch=epoch, step=step,
-                               input_vocab=data.fields[seq2seq.src_field_name].vocab,
-                               output_vocab=data.fields[seq2seq.tgt_field_name].vocab).save(self.expt_dir)
+                # if step % self.checkpoint_every == 0 or step == total_steps:
+                #     Checkpoint(model=model,
+                #                optimizer=self.optimizer,
+                #                epoch=epoch, step=step,
+                #                input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
+                #                output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab,
+                #                class_vocab=data.fields[seq2seq.class_src_field_name].vocab,
+                #                class_label=data.fields[seq2seq.class_tgt_field_name].vocab).save(self.expt_dir)
 
             if step_elapsed == 0:
                 continue
@@ -166,9 +169,24 @@ class MultiTaskTrainer(object):
             epoch_loss_total = 0
             log_msg = "Finished epoch %d: Train %s: %.4f" % (epoch, self.loss.name, epoch_loss_avg)
             if dev_data is not None:
-                dev_loss, accuracy = self.evaluator.evaluate(model, dev_data)
+                dev_loss, accuracy, pred_result, gold_result = self.evaluator.evaluate(model, dev_data)
                 self.optimizer.update(dev_loss, epoch)
-                log_msg += ", Dev %s: %.4f, Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
+
+                f1 = metrics.f1_score(gold_result, pred_result, average='weighted')
+                p = metrics.precision_score(gold_result, pred_result, average='weighted')
+                r = metrics.recall_score(gold_result, pred_result, average='weighted')
+                acc = metrics.accuracy_score(gold_result, pred_result)
+
+                if dev_loss < min_loss:
+                    Checkpoint(model=model,
+                               optimizer=self.optimizer,
+                               epoch=epoch, step=step,
+                               input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
+                               output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab,
+                               class_vocab=data.fields[seq2seq.class_src_field_name].vocab,
+                               class_label=data.fields[seq2seq.class_tgt_field_name].vocab).save(self.expt_dir)
+                log_msg += ", Dev %s: %.4f, Normlization Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
+                log_msg += '\nAggressive language detection ,weighted_f1: {}, p: {}, r: {}, acc: {}'.format(f1, p, r, acc)
                 model.train(mode=True)
             else:
                 self.optimizer.update(epoch_loss_avg, epoch)
