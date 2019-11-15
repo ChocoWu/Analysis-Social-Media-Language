@@ -14,7 +14,7 @@ from seq2seq.models.multi_task import Multi_Task
 from seq2seq.models.Classification import Classification
 from seq2seq.loss.loss import Perplexity
 from seq2seq.dataset.fields import SourceField, TargetField
-from seq2seq.evaluator.evaluator import Evaluator
+from seq2seq.evaluator.multi_task_evaluator import Evaluator
 from seq2seq.evaluator.predictor import Predictor
 from seq2seq.util.checkpoint import Checkpoint
 from seq2seq.util.tokenizer import tokenize
@@ -75,9 +75,9 @@ test = torchtext.data.TabularDataset(
     fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt), ('class_src', class_src), ('class_tgt', class_tgt)],
     filter_pred=len_filter
 )
-norm_src.build_vocab(train, max_size=200000)
-norm_tgt.build_vocab(train, max_size=200000)
-class_src.build_vocab(train, max_size=200000)
+norm_src.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
+norm_tgt.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
+class_src.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
 class_tgt.build_vocab(train, max_size=10)
 norm_input_vocab = norm_src.vocab
 norm_output_vocab = norm_tgt.vocab
@@ -91,15 +91,19 @@ loss = Perplexity(weight, pad)
 if torch.cuda.is_available():
     loss.cuda()
 
+multi_task = None
+
 if opt.load_checkpoint is not None:
     logging.info("loading checkpoint from {}".format(os.path.join(opt.expt_dir, Checkpoint.CHECKPOINT_DIR_NAME, opt.load_checkpoint)))
     checkpoint_path = os.path.join(opt.expt_dir, Checkpoint.CHECKPOINT_DIR_NAME, opt.load_checkpoint)
     checkpoint = Checkpoint.load(checkpoint_path)
-    seq2seq = checkpoint.model
+    multi_task = checkpoint.model
     input_vocab = checkpoint.input_vocab
     output_vocab = checkpoint.output_vocab
-else:
-    multi_task = None
+    class_input_vocab = checkpoint.class_vocab
+    class_output_vocab = checkpoint.class_label
+
+if multi_task is None:
     optimizer = None
     if not opt.resume:
         # Initialize model
@@ -117,26 +121,27 @@ else:
         classification = Classification(hidden_size, opt.num_layer, opt.num_class, bidirectional=True, dropout_p=0.5,
                                         use_attention=False)
         multi_task = Multi_Task(encoder, decoder, classification)
-        if torch.cuda.is_available():
-            multi_task.cuda()
 
-        for param in multi_task.parameters():
-            param.data.uniform_(-0.08, 0.08)
+if torch.cuda.is_available():
+        multi_task.cuda()
 
-    # train
-    t = MultiTaskTrainer(loss=loss, batch_size=40,
-                         checkpoint_every=100,
-                         print_every=200, expt_dir=opt.expt_dir)
+        # for param in multi_task.parameters():
+        #     param.data.uniform_(-0.08, 0.08)
 
-    multi_task = t.train(multi_task, train,
-                         num_epochs=5, dev_data=dev,
-                         optimizer=optimizer,
-                         teacher_forcing_ratio=0.5,
-                         resume=opt.resume)
+# train
+t = MultiTaskTrainer(loss=loss, batch_size=40,
+                     checkpoint_every=100,
+                     print_every=200, expt_dir=opt.expt_dir)
 
-evaluator = Evaluator(loss=loss, batch_size=32)
-dev_loss, accuracy = evaluator.evaluate(multi_task, dev)
-print('dev_loss: {}, dev_accuracy: {}'.format(dev_loss, accuracy))
+multi_task = t.train(multi_task, train,
+                     num_epochs=5, dev_data=dev,
+                     optimizer=optimizer,
+                     teacher_forcing_ratio=0.5,
+                     resume=opt.resume)
+
+# evaluator = Evaluator(loss=loss, batch_size=32)
+# dev_loss, accuracy = evaluator.evaluate(multi_task, dev)
+# print('dev_loss: {}, dev_accuracy: {}'.format(dev_loss, accuracy))
 # assert dev_loss < 1.5
 
 beam_search = Multi_Task(multi_task.encoder, TopKDecoder(multi_task.decoder, 3))
