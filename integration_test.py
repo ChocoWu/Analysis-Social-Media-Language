@@ -43,38 +43,38 @@ logging.basicConfig(format=LOG_FORMAT, level=getattr(logging, opt.log_level.uppe
 logging.info(opt)
 
 # Prepare dataset
-src = SourceField(tokenize=tokenize)
-tgt = TargetField(tokenize=tokenize)
+norm_src = SourceField(tokenize=tokenize)
+norm_tgt = TargetField(tokenize=tokenize)
 max_len = 50  # the max length of a sentence
 
 
 def len_filter(example):
-    return len(example.src) <= max_len and len(example.tgt) <= max_len
+    return len(example.norm_src) <= max_len and len(example.norm_tgt) <= max_len
 
 
 train = torchtext.data.TabularDataset(
     path=opt.train_path, format='csv',
-    fields=[('src', src), ('tgt', tgt)],
+    fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt)],
     filter_pred=len_filter
 )
 dev = torchtext.data.TabularDataset(
     path=opt.dev_path, format='csv',
-    fields=[('src', src), ('tgt', tgt)],
+    fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt)],
     filter_pred=len_filter
 )
 test = torchtext.data.TabularDataset(
     path=opt.test_path, format='csv',
-    fields=[('src', src), ('tgt', tgt)],
+    fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt)],
     filter_pred=len_filter
 )
-src.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
-tgt.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
-input_vocab = src.vocab
-output_vocab = tgt.vocab
+norm_src.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
+norm_tgt.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
+input_vocab = norm_src.vocab
+output_vocab = norm_tgt.vocab
 
 # Prepare loss
-weight = torch.ones(len(tgt.vocab))
-pad = tgt.vocab.stoi[tgt.pad_token]
+weight = torch.ones(len(norm_tgt.vocab))
+pad = norm_tgt.vocab.stoi[norm_tgt.pad_token]
 loss = Perplexity(weight, pad)
 if torch.cuda.is_available():
     loss.cuda()
@@ -93,15 +93,15 @@ else:
         # Initialize model
         hidden_size = 100
         bidirectional = True
-        encoder = EncoderRNN(len(src.vocab), max_len, hidden_size,
+        encoder = EncoderRNN(len(norm_src.vocab), max_len, hidden_size,
                              bidirectional=bidirectional,
                              rnn_cell='lstm',
                              variable_lengths=True)
-        decoder = DecoderRNN(len(tgt.vocab), max_len, hidden_size * 2,
+        decoder = DecoderRNN(len(norm_tgt.vocab), max_len, hidden_size * 2,
                              dropout_p=0.2, use_attention=True,
                              bidirectional=bidirectional,
                              rnn_cell='lstm',
-                             eos_id=tgt.eos_id, sos_id=tgt.sos_id)
+                             eos_id=norm_tgt.eos_id, sos_id=norm_tgt.sos_id)
         seq2seq = Seq2seq(encoder, decoder)
         if torch.cuda.is_available():
             seq2seq.cuda()
