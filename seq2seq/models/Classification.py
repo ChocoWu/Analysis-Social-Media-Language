@@ -47,17 +47,17 @@ class Classification(nn.Module):
         hidden = self.linear_2(hidden.transpose(0, 1).view(batch_size, -1))
 
         atten_lstm = torch.tanh(self.linear_1(lstm_output))
-        atten_weights = torch.bmm(atten_lstm, hidden.unsqueeze(2).squeeze(2))
+        atten_weights = torch.bmm(atten_lstm, hidden.unsqueeze(2)).squeeze(2)
         soft_attn_weights = F.softmax(atten_weights, 1)
 
-        new_hidden_state = torch.bmm(lstm_output.tranpose(1, 2), soft_attn_weights.unsqueeze(2)).squeeze(2)
+        new_hidden_state = torch.bmm(lstm_output.transpose(1, 2), soft_attn_weights.unsqueeze(2)).squeeze(2)
         return new_hidden_state, soft_attn_weights
 
     def forward(self, x):
         output, (h_n, c_n) = self.lstm(x)
-        batch_size = output.size(0)
-        seq_len = output.size(1)
-        h = output.size(2)
+        # batch_size = output.size(0)
+        # seq_len = output.size(1)
+        # h = output.size(2)
 
         output, attn = self.attention_layer(output, h_n)
         output = self.linear(output)
