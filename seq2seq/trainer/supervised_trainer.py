@@ -79,7 +79,7 @@ class SupervisedTrainer(object):
         batch_iterator = torchtext.data.BucketIterator(
             dataset=data, batch_size=self.batch_size,
             sort=False, sort_within_batch=True,
-            sort_key=lambda x: len(x.src),
+            sort_key=lambda x: len(x.norm_src),
             device=device, repeat=False)
 
         steps_per_epoch = len(batch_iterator)
@@ -101,8 +101,8 @@ class SupervisedTrainer(object):
                 step += 1
                 step_elapsed += 1
 
-                input_variables, input_lengths = getattr(batch, seq2seq.src_field_name)
-                target_variables = getattr(batch, seq2seq.tgt_field_name)
+                input_variables, input_lengths = getattr(batch, seq2seq.norm_src_field_name)
+                target_variables = getattr(batch, seq2seq.norm_tgt_field_name)
 
                 if torch.cuda.is_available():
                     input_variables = input_variables.cuda()
@@ -143,8 +143,8 @@ class SupervisedTrainer(object):
                     Checkpoint(model=model,
                                optimizer=self.optimizer,
                                epoch=epoch, step=step,
-                               input_vocab=data.fields[seq2seq.src_field_name].vocab,
-                               output_vocab=data.fields[seq2seq.tgt_field_name].vocab).save(self.expt_dir)
+                               input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
+                               output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab).save(self.expt_dir)
                 log_msg += ", Dev %s: %.4f, Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
 
                 model.train(mode=True)
