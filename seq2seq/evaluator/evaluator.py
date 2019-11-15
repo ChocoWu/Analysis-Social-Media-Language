@@ -41,13 +41,13 @@ class Evaluator(object):
             dataset=data, batch_size=self.batch_size,
             sort=True, sort_key=lambda x: len(x.src),
             device=device, train=False)
-        tgt_vocab = data.fields[seq2seq.tgt_field_name].vocab
-        pad = tgt_vocab.stoi[data.fields[seq2seq.tgt_field_name].pad_token]
+        tgt_vocab = data.fields[seq2seq.norm_tgt_field_name].vocab
+        pad = tgt_vocab.stoi[data.fields[seq2seq.norm_tgt_field_name].pad_token]
 
         with torch.no_grad():
             for batch in batch_iterator:
-                input_variables, input_lengths = getattr(batch, seq2seq.src_field_name)
-                target_variables = getattr(batch, seq2seq.tgt_field_name)
+                input_variables, input_lengths = getattr(batch, seq2seq.norm_src_field_name)
+                target_variables = getattr(batch, seq2seq.norm_tgt_field_name)
 
                 if torch.cuda.is_available():
                     input_variables = input_variables.cuda()
