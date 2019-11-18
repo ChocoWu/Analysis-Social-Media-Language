@@ -23,9 +23,13 @@ class Classification(nn.Module):
                             bidirectional=bidirectional,
                             dropout=dropout_p,
                             batch_first=True)
-        self.linear = nn.Linear(self.hidden_size * self.num_directions, self.num_class)
         self.linear_1 = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size)
         self.linear_2 = nn.Linear(self.hidden_size * self.num_directions * self.num_layer, self.hidden_size)
+
+        input_size = self.hidden_size * self.num_directions + self.hidden_size
+        self.fc1 = nn.Linear(input_size, input_size // 2)
+        self.fc2 = nn.Linear(input_size // 2, input_size // 2 // 2)
+        self.fc3 = nn.Linear(input_size // 2 // 2, self.num_class)
 
     def reset_parameters(self):
         stdv = 1.0 / math.sqrt(self.hidden_size)
@@ -53,13 +57,16 @@ class Classification(nn.Module):
         new_hidden_state = torch.bmm(lstm_output.transpose(1, 2), soft_attn_weights.unsqueeze(2)).squeeze(2)
         return new_hidden_state, soft_attn_weights
 
-    def forward(self, x):
+    def forward(self, x, decoder_hidden=None):
         output, (h_n, c_n) = self.lstm(x)
         # batch_size = output.size(0)
         # seq_len = output.size(1)
         # h = output.size(2)
 
         output, attn = self.attention_layer(output, h_n)
-        output = self.linear(output)
+        output = torch.cat((output, decoder_hidden), dim=1)
+        output = self.fc1(output)
+        output = self.fc2(output)
+        output = self.fc3(output)
         return output, attn
 

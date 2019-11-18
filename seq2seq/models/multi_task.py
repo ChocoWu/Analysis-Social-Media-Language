@@ -56,12 +56,21 @@ class Multi_Task(nn.Module):
     def forward(self, norm_input, norm_lengths=None, norm_target=None, class_input=None,
                 class_y=None, class_lengths=None, teacher_forcing_ratio=0):
         norm_encoder_outputs, norm_encoder_hidden = self.encoder(norm_input, norm_lengths)
-        class_encoder_outputs, class_encoder_hidden = self.encoder(class_input, class_lengths)
         norm_result = self.decoder(inputs=norm_target,
                                    encoder_hidden=norm_encoder_hidden,
                                    encoder_outputs=norm_encoder_outputs,
                                    function=self.decode_function,
                                    teacher_forcing_ratio=teacher_forcing_ratio)
-        class_result = self.classification(class_encoder_outputs)
+        if class_input is not None:
+            class_encoder_outputs, class_encoder_hidden = self.encoder(class_input, class_lengths)
+            class_target = torch.ones((2), dtype=torch.int64)
+            if torch.cuda.is_available():
+                class_target = class_target.new_full((class_y.size(0), 1), fill_value=3).cuda()
+            class_decoder_output = self.decoder(encoder_hidden=class_encoder_hidden,
+                                                encoder_outputs=class_encoder_outputs,
+                                                function=self.decode_function)
 
-        return norm_result, class_result
+            class_result = self.classification(class_encoder_outputs, class_decoder_output[1][0].squeeze())
+            return norm_result, class_result
+
+        return norm_result
