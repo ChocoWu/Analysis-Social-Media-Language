@@ -56,27 +56,134 @@ class MultiTaskTrainer(object):
 
         self.logger = logging.getLogger(__name__)
 
-    def _train_batch(self, input_variable, input_lengths, target_variable, class_input, class_output, class_lengths,
-                     model, teacher_forcing_ratio):
+    def _train_batch(self, input_variable, input_lengths, target_variable, model, teacher_forcing_ratio,
+                     class_input=None, class_output=None, class_lengths=None):
         loss = self.loss
         # Forward propagation
-        (decoder_outputs, decoder_hidden, other), class_result = model(input_variable, input_lengths, target_variable,
-                                                                       class_input, class_output, class_lengths,
-                                                                       teacher_forcing_ratio=teacher_forcing_ratio)
-        # Get loss
-        loss.reset()
-        for step, step_output in enumerate(decoder_outputs):
-            batch_size = target_variable.size(0)
-            loss.eval_batch(step_output.contiguous().view(batch_size, -1), target_variable[:, step + 1])
-        # Backward propagation
-        c_loss = self.class_loss(class_result[0], (class_output-2).squeeze(1))
-        # print(loss.acc_loss())
-        total_loss = c_loss + loss.acc_loss
-        model.zero_grad()
-        total_loss.backward()
-        self.optimizer.step()
+        if class_input is None:
+            (decoder_outputs, decoder_hidden, other) = model(input_variable, input_lengths,
+                                                                           target_variable,
+                                                                           teacher_forcing_ratio=teacher_forcing_ratio)
+            # Get loss
+            loss.reset()
+            for step, step_output in enumerate(decoder_outputs):
+                batch_size = target_variable.size(0)
+                loss.eval_batch(step_output.contiguous().view(batch_size, -1), target_variable[:, step + 1])
+            # Backward propagation
 
-        return loss.get_loss() + c_loss.cpu().item()
+            model.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            return loss.get_loss()
+        else:
+            (decoder_outputs, decoder_hidden, other), class_result = model(input_variable, input_lengths,
+                                                                           target_variable,
+                                                                           class_input, class_output, class_lengths,
+                                                                           teacher_forcing_ratio=teacher_forcing_ratio)
+            # Get loss
+            loss.reset()
+            for step, step_output in enumerate(decoder_outputs):
+                batch_size = target_variable.size(0)
+                loss.eval_batch(step_output.contiguous().view(batch_size, -1), target_variable[:, step + 1])
+            # Backward propagation
+            c_loss = self.class_loss(class_result[0], (class_output - 2).squeeze(1))
+            # print(loss.acc_loss())
+            total_loss = c_loss + loss.acc_loss
+            model.zero_grad()
+            total_loss.backward()
+            self.optimizer.step()
+
+            return loss.get_loss() + c_loss.cpu().item()
+
+    def _pre_train_epochs(self, data, model, n_epochs, start_epoch, start_step,
+                          dev_data=None, test_data=None, teacher_forcing_ratio=0):
+        log = self.logger
+
+        print_loss_total = 0  # Reset every print_every
+        epoch_loss_total = 0  # Reset every epoch
+
+        device = None if torch.cuda.is_available() else -1
+        batch_iterator = torchtext.data.BucketIterator(
+            dataset=data, batch_size=self.batch_size,
+            sort=False, sort_within_batch=True,
+            sort_key=lambda x: len(x.norm_src),
+            device=device, repeat=False)
+
+        steps_per_epoch = len(batch_iterator)
+        total_steps = steps_per_epoch * n_epochs
+
+        step = start_step
+        step_elapsed = 0
+        min_loss = float("inf")
+        early_stop = 0
+        for epoch in range(start_epoch, n_epochs + 1):
+            log.debug("Epoch: %d, Step: %d" % (epoch, step))
+
+            batch_generator = batch_iterator.__iter__()
+            # consuming seen batches from previous training
+            for _ in range((epoch - 1) * steps_per_epoch, step):
+                next(batch_generator)
+
+
+            model.train(True)
+            for batch in batch_generator:
+                step += 1
+                step_elapsed += 1
+
+                input_variables, input_lengths = getattr(batch, seq2seq.norm_src_field_name)
+                target_variables = getattr(batch, seq2seq.norm_tgt_field_name)
+
+                if torch.cuda.is_available():
+                    input_variables = input_variables.cuda()
+                    target_variables = target_variables.cuda()
+
+                loss = self._train_batch(input_variables,
+                                         input_lengths.tolist(), target_variables,
+                                         model, teacher_forcing_ratio)
+
+                # Record average loss
+                print_loss_total += loss
+                epoch_loss_total += loss
+
+                if step % self.print_every == 0 and step_elapsed > self.print_every:
+                    print_loss_avg = print_loss_total / self.print_every
+                    print_loss_total = 0
+                    log_msg = 'Progress: %d%%, Train %s: %.4f' % (
+                        step / total_steps * 100,
+                        self.loss.name,
+                        print_loss_avg)
+                    log.info(log_msg)
+                #
+                # Checkpoint(model=model,
+                #            optimizer=self.optimizer,
+                #            epoch=epoch, step=step,
+                #            input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
+                #            output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab).save(self.expt_dir)
+
+            if step_elapsed == 0:
+                continue
+
+            epoch_loss_avg = epoch_loss_total / min(steps_per_epoch, step - start_step)
+            epoch_loss_total = 0
+            log_msg = "Finished epoch %d: Train %s: %.4f" % (epoch, self.loss.name, epoch_loss_avg)
+            if dev_data is not None:
+                dev_loss, accuracy = self.evaluator.pre_train_evaluator(model, dev_data)
+                self.optimizer.update(dev_loss, epoch)
+
+                if dev_loss < min_loss:
+                    Checkpoint(model=model,
+                               optimizer=self.optimizer,
+                               epoch=epoch, step=step,
+                               input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
+                               output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab).save(self.expt_dir)
+                log_msg += ", Dev %s: %.4f, Normlization Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
+
+                model.train(mode=True)
+            else:
+                self.optimizer.update(epoch_loss_avg, epoch)
+
+            log.info(log_msg)
 
     def _train_epoches(self, data, model, n_epochs, start_epoch, start_step,
                        dev_data=None, test_data=None, teacher_forcing_ratio=0):
@@ -135,9 +242,8 @@ class MultiTaskTrainer(object):
 
                 loss = self._train_batch(input_variables,
                                          input_lengths.tolist(), target_variables,
-                                         class_input, class_output, class_lengths,
-                                         model,
-                                         teacher_forcing_ratio)
+                                         model, teacher_forcing_ratio,
+                                         class_input, class_output, class_lengths)
 
                 # Record average loss
                 print_loss_total += loss
@@ -151,16 +257,6 @@ class MultiTaskTrainer(object):
                         self.loss.name,
                         print_loss_avg)
                     log.info(log_msg)
-
-                # Checkpoint
-                # if step % self.checkpoint_every == 0 or step == total_steps:
-                #     Checkpoint(model=model,
-                #                optimizer=self.optimizer,
-                #                epoch=epoch, step=step,
-                #                input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
-                #                output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab,
-                #                class_vocab=data.fields[seq2seq.class_src_field_name].vocab,
-                #                class_label=data.fields[seq2seq.class_tgt_field_name].vocab).save(self.expt_dir)
 
             if step_elapsed == 0:
                 continue
@@ -195,7 +291,7 @@ class MultiTaskTrainer(object):
 
     def train(self, model, data, num_epochs=5,
               resume=False, dev_data=None,
-              optimizer=None, teacher_forcing_ratio=0, lr=0.001):
+              optimizer=None, teacher_forcing_ratio=0, lr=0.001, pre_train=False):
         """ Run training for a given model.
         Args:
             model (seq2seq.models): model to run training on, if `resume=True`, it would be
@@ -235,7 +331,12 @@ class MultiTaskTrainer(object):
 
         self.logger.info("Optimizer: %s, Scheduler: %s" % (self.optimizer.optimizer, self.optimizer.scheduler))
 
-        self._train_epoches(data, model, num_epochs,
-                            start_epoch, step, dev_data=dev_data,
-                            teacher_forcing_ratio=teacher_forcing_ratio)
+        if pre_train:
+            self._pre_train_epochs(data, model, num_epochs, start_epoch, step, dev_data=dev_data,
+                                   teacher_forcing_ratio=teacher_forcing_ratio)
+        else:
+            self._train_epoches(data, model, num_epochs,
+                                start_epoch, step, dev_data=dev_data,
+                                teacher_forcing_ratio=teacher_forcing_ratio)
+
         return model
