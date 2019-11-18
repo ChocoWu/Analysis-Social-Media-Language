@@ -39,7 +39,7 @@ class Evaluator(object):
         device = None if torch.cuda.is_available() else -1
         batch_iterator = torchtext.data.BucketIterator(
             dataset=data, batch_size=self.batch_size,
-            sort=True, sort_key=lambda x: len(x.src),
+            sort=True, sort_key=lambda x: len(x.norm_src),
             device=device, train=False)
         tgt_vocab = data.fields[seq2seq.norm_tgt_field_name].vocab
         pad = tgt_vocab.stoi[data.fields[seq2seq.norm_tgt_field_name].pad_token]
