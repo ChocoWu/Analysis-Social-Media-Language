@@ -57,13 +57,14 @@ class MultiTaskTrainer(object):
         self.logger = logging.getLogger(__name__)
 
     def _train_batch(self, input_variable, input_lengths, target_variable, model, teacher_forcing_ratio,
-                     class_input=None, class_output=None, class_lengths=None):
-        loss = self.loss
-        # Forward propagation
-        if class_input is None:
+                     train_type=None):
+        if train_type == 'pre_train':
+            loss = self.loss
+            # Forward propagation
             (decoder_outputs, decoder_hidden, other) = model(input_variable, input_lengths,
-                                                                           target_variable,
-                                                                           teacher_forcing_ratio=teacher_forcing_ratio)
+                                                             target_variable,
+                                                             teacher_forcing_ratio=teacher_forcing_ratio,
+                                                             train_type=train_type)
             # Get loss
             loss.reset()
             for step, step_output in enumerate(decoder_outputs):
@@ -77,27 +78,18 @@ class MultiTaskTrainer(object):
 
             return loss.get_loss()
         else:
-            (decoder_outputs, decoder_hidden, other), class_result = model(input_variable, input_lengths,
-                                                                           target_variable,
-                                                                           class_input, class_output, class_lengths,
-                                                                           teacher_forcing_ratio=teacher_forcing_ratio)
-            # Get loss
-            loss.reset()
-            for step, step_output in enumerate(decoder_outputs):
-                batch_size = target_variable.size(0)
-                loss.eval_batch(step_output.contiguous().view(batch_size, -1), target_variable[:, step + 1])
-            # Backward propagation
-            c_loss = self.class_loss(class_result[0], (class_output - 2).squeeze(1))
-            # print(loss.acc_loss())
-            total_loss = c_loss + loss.acc_loss
+            class_result = model(input_variable, input_lengths,
+                                 target_variable,
+                                 teacher_forcing_ratio=teacher_forcing_ratio)
+            c_loss = self.class_loss(class_result[0], (target_variable - 2).squeeze(1))
             model.zero_grad()
-            total_loss.backward()
+            c_loss.backward()
             self.optimizer.step()
 
-            return loss.get_loss() + c_loss.cpu().item()
+            return c_loss.cpu().item()
 
     def _pre_train_epochs(self, data, model, n_epochs, start_epoch, start_step,
-                          dev_data=None, test_data=None, teacher_forcing_ratio=0):
+                          dev_data=None, test_data=None, teacher_forcing_ratio=0.6):
         log = self.logger
 
         print_loss_total = 0  # Reset every print_every
@@ -140,7 +132,7 @@ class MultiTaskTrainer(object):
 
                 loss = self._train_batch(input_variables,
                                          input_lengths.tolist(), target_variables,
-                                         model, teacher_forcing_ratio)
+                                         model, teacher_forcing_ratio, 'pre_train')
 
                 # Record average loss
                 print_loss_total += loss
@@ -154,12 +146,6 @@ class MultiTaskTrainer(object):
                         self.loss.name,
                         print_loss_avg)
                     log.info(log_msg)
-                #
-                # Checkpoint(model=model,
-                #            optimizer=self.optimizer,
-                #            epoch=epoch, step=step,
-                #            input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
-                #            output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab).save(self.expt_dir)
 
             if step_elapsed == 0:
                 continue
@@ -196,12 +182,6 @@ class MultiTaskTrainer(object):
         batch_iterator = torchtext.data.BucketIterator(
             dataset=data, batch_size=self.batch_size,
             sort=False, sort_within_batch=True,
-            sort_key=lambda x: len(x.norm_src),
-            device=device, repeat=False)
-
-        class_batch_iterator = torchtext.data.BucketIterator(
-            dataset=data, batch_size=self.batch_size,
-            sort=False, sort_within_batch=True,
             sort_key=lambda x: len(x.class_src),
             device=device, repeat=False,
         )
@@ -211,39 +191,30 @@ class MultiTaskTrainer(object):
 
         step = start_step
         step_elapsed = 0
-        min_loss = float("inf")
-        early_stop = 0
+        min_f1 = 0
         for epoch in range(start_epoch, n_epochs + 1):
             log.debug("Epoch: %d, Step: %d" % (epoch, step))
 
             batch_generator = batch_iterator.__iter__()
-            class_batch_generator = class_batch_iterator.__iter__()
             # consuming seen batches from previous training
             for _ in range((epoch - 1) * steps_per_epoch, step):
                 next(batch_generator)
-            for _ in range((epoch - 1) * steps_per_epoch, step):
-                next(class_batch_generator)
 
             model.train(True)
-            for batch, class_batch in zip(batch_generator, class_batch_iterator):
+            for batch in batch_generator:
                 step += 1
                 step_elapsed += 1
 
-                input_variables, input_lengths = getattr(batch, seq2seq.norm_src_field_name)
-                target_variables = getattr(batch, seq2seq.norm_tgt_field_name)
-                class_input, class_lengths = getattr(class_batch, seq2seq.class_src_field_name)
-                class_output, _ = getattr(class_batch, seq2seq.class_tgt_field_name)
+                input_variables, class_lengths = getattr(batch, seq2seq.class_src_field_name)
+                target_variables, _ = getattr(batch, seq2seq.class_tgt_field_name)
 
                 if torch.cuda.is_available():
                     input_variables = input_variables.cuda()
                     target_variables = target_variables.cuda()
-                    class_input = class_input.cuda()
-                    class_output = class_output.cuda()
 
                 loss = self._train_batch(input_variables,
-                                         input_lengths.tolist(), target_variables,
-                                         model, teacher_forcing_ratio,
-                                         class_input, class_output, class_lengths)
+                                         class_lengths, target_variables,
+                                         model, teacher_forcing_ratio)
 
                 # Record average loss
                 print_loss_total += loss
@@ -252,9 +223,9 @@ class MultiTaskTrainer(object):
                 if step % self.print_every == 0 and step_elapsed > self.print_every:
                     print_loss_avg = print_loss_total / self.print_every
                     print_loss_total = 0
-                    log_msg = 'Progress: %d%%, Train %s: %.4f' % (
+                    log_msg = 'Progress: %d%%, Train average loss/%d : %.4f' % (
                         step / total_steps * 100,
-                        self.loss.name,
+                        self.print_every,
                         print_loss_avg)
                     log.info(log_msg)
 
@@ -263,35 +234,34 @@ class MultiTaskTrainer(object):
 
             epoch_loss_avg = epoch_loss_total / min(steps_per_epoch, step - start_step)
             epoch_loss_total = 0
-            log_msg = "Finished epoch %d: Train %s: %.4f" % (epoch, self.loss.name, epoch_loss_avg)
+            log_msg = "Finished epoch %d: Train epoch average loss: %.4f" % (epoch, epoch_loss_avg)
             if dev_data is not None:
-                dev_loss, accuracy, pred_result, gold_result = self.evaluator.evaluate(model, dev_data)
-                self.optimizer.update(dev_loss, epoch)
+                pred_result, gold_result = self.evaluator.evaluate(model, dev_data)
+                # self.optimizer.update(dev_loss, epoch)
 
                 f1 = metrics.f1_score(gold_result, pred_result, average='weighted')
                 p = metrics.precision_score(gold_result, pred_result, average='weighted')
                 r = metrics.recall_score(gold_result, pred_result, average='weighted')
                 acc = metrics.accuracy_score(gold_result, pred_result)
 
-                if dev_loss < min_loss:
+                if f1 > min_f1:
                     Checkpoint(model=model,
                                optimizer=self.optimizer,
                                epoch=epoch, step=step,
-                               input_vocab=data.fields[seq2seq.norm_src_field_name].vocab,
-                               output_vocab=data.fields[seq2seq.norm_tgt_field_name].vocab,
-                               class_vocab=data.fields[seq2seq.class_src_field_name].vocab,
-                               class_label=data.fields[seq2seq.class_tgt_field_name].vocab).save(self.expt_dir)
-                log_msg += ", Dev %s: %.4f, Normlization Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
+                               input_vocab=data.fields[seq2seq.class_src_field_name].vocab,
+                               output_vocab=data.fields[seq2seq.class_tgt_field_name].vocab).save(self.expt_dir)
+                # log_msg += ", Dev %s: %.4f, Normlization Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
                 log_msg += '\nAggressive language detection ,weighted_f1: {}, p: {}, r: {}, acc: {}'.format(f1, p, r, acc)
                 model.train(mode=True)
             else:
-                self.optimizer.update(epoch_loss_avg, epoch)
+                pass
+                # self.optimizer.update(epoch_loss_avg, epoch)
 
             log.info(log_msg)
 
     def train(self, model, data, num_epochs=5,
               resume=False, dev_data=None,
-              optimizer=None, teacher_forcing_ratio=0, lr=0.001, pre_train=False):
+              optimizer=None, teacher_forcing_ratio=0, lr=0.003, pre_train=False):
         """ Run training for a given model.
         Args:
             model (seq2seq.models): model to run training on, if `resume=True`, it would be

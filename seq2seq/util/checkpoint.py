@@ -35,19 +35,14 @@ class Checkpoint(object):
     MODEL_NAME = 'model.pt'
     INPUT_VOCAB_FILE = 'input_vocab.pt'
     OUTPUT_VOCAB_FILE = 'output_vocab.pt'
-    CLASS_VOCAB_FILE = 'class_vocab.pt'
-    CLASS_LABEL_FILE = 'class_label.pt'
 
-    def __init__(self, model, optimizer, epoch, step, input_vocab, output_vocab,
-                 class_vocab=None, class_label=None, path=None):
+    def __init__(self, model, optimizer, epoch, step, input_vocab=None, output_vocab=None, path=None):
         self.model = model
         self.optimizer = optimizer
         self.input_vocab = input_vocab
         self.output_vocab = output_vocab
         self.epoch = epoch
         self.step = step
-        self.class_vocab = class_vocab
-        self.class_label = class_label
         self._path = path
 
     @property
@@ -80,16 +75,12 @@ class Checkpoint(object):
                    os.path.join(path, self.TRAINER_STATE_NAME))
         torch.save(self.model, os.path.join(path, self.MODEL_NAME))
 
-        with open(os.path.join(path, self.INPUT_VOCAB_FILE), 'wb') as fout:
-            dill.dump(self.input_vocab, fout)
-        with open(os.path.join(path, self.OUTPUT_VOCAB_FILE), 'wb') as fout:
-            dill.dump(self.output_vocab, fout)
-        if self.class_vocab is not None:
-            with open(os.path.join(path, self.CLASS_VOCAB_FILE), 'wb') as fout:
-                dill.dump(self.class_vocab, fout)
-        if self.class_label is not None:
-            with open(os.path.join(path, self.CLASS_LABEL_FILE), 'wb') as fout:
-                dill.dump(self.class_label, fout)
+        if self.input_vocab is not None:
+            with open(os.path.join(path, self.INPUT_VOCAB_FILE), 'wb') as fout:
+                dill.dump(self.input_vocab, fout)
+        if self.output_vocab is not None:
+            with open(os.path.join(path, self.OUTPUT_VOCAB_FILE), 'wb') as fout:
+                dill.dump(self.output_vocab, fout)
 
         return path
 
@@ -109,24 +100,18 @@ class Checkpoint(object):
             resume_checkpoint = torch.load(os.path.join(path, cls.TRAINER_STATE_NAME), map_location=lambda storage, loc: storage)
             model = torch.load(os.path.join(path, cls.MODEL_NAME), map_location=lambda storage, loc: storage)
 
-        model.flatten_parameters() # make RNN parameters contiguous
-        with open(os.path.join(path, cls.INPUT_VOCAB_FILE), 'rb') as fin:
-            input_vocab = dill.load(fin)
-        with open(os.path.join(path, cls.OUTPUT_VOCAB_FILE), 'rb') as fin:
-            output_vocab = dill.load(fin)
-        class_vocab = None
-        class_label = None
-        if os.path.exists(os.path.join(path, cls.CLASS_VOCAB_FILE)):
-            with open(os.path.join(path, cls.CLASS_VOCAB_FILE), 'rb') as fin:
-                class_vocab = dill.load(fin)
-        if os.path.exists(os.path.join(path, cls.CLASS_LABEL_FILE)):
-            with open(os.path.join(path, cls.CLASS_LABEL_FILE), 'rb') as fin:
-                class_label = dill.load(fin)
-
+        model.flatten_parameters()  # make RNN parameters contiguous
         optimizer = resume_checkpoint['optimizer']
+
+        if os.path.exists(os.path.join(path, cls.INPUT_VOCAB_FILE)):
+            with open(os.path.join(path, cls.INPUT_VOCAB_FILE), 'rb') as fin:
+                input_vocab = dill.load(fin)
+        if os.path.exists(os.path.join(path, cls.OUTPUT_VOCAB_FILE)):
+            with open(os.path.join(path, cls.OUTPUT_VOCAB_FILE), 'rb') as fin:
+                output_vocab = dill.load(fin)
+
         return Checkpoint(model=model, input_vocab=input_vocab,
-                          output_vocab=output_vocab, class_vocab=class_vocab,
-                          class_label=class_label,
+                          output_vocab=output_vocab,
                           optimizer=optimizer,
                           epoch=resume_checkpoint['epoch'],
                           step=resume_checkpoint['step'],

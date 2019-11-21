@@ -18,20 +18,21 @@ from seq2seq.evaluator.multi_task_evaluator import Evaluator
 from seq2seq.evaluator.predictor import Predictor
 from seq2seq.util.checkpoint import Checkpoint
 from seq2seq.util.tokenizer import tokenize
-
+# import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--train_path', action='store', dest='train_path',
-                    help='Path to train data', default='./data/train_new.csv')
+                    help='Path to train data', default='./data/agr_en_train.csv')
 parser.add_argument('--dev_path', action='store', dest='dev_path',
-                    help='Path to dev data', default='./data/dev_new.csv')
+                    help='Path to dev data', default='./data/agr_en_dev.csv')
 parser.add_argument('--test1_path', action='store', dest='test_path',
                     help='Path to test data', default='./data/test_1.csv')
 parser.add_argument('--test2_path', action='store', dest='test_path',
                     help='the twitter test dataset', default='../data/test_2.csv')
 parser.add_argument('--expt_dir', action='store', dest='expt_dir', default='./experiment/',
                     help='Path to experiment directory. If load_checkpoint is True, then path to checkpoint directory has to be provided')
-parser.add_argument('--load_checkpoint', action='store', dest='load_checkpoint', default='2019_11_18_04_28_28',
+parser.add_argument('--load_checkpoint', action='store', dest='load_checkpoint', default='2019_11_21_18_10_05',
                     help='The name of the checkpoint to load, usually an encoded time string')
 parser.add_argument('--resume', action='store_true', dest='resume',
                     default=False,
@@ -39,7 +40,7 @@ parser.add_argument('--resume', action='store_true', dest='resume',
 parser.add_argument('--log-level', dest='log_level',
                     default='info',
                     help='Logging level.')
-parser.add_argument('--lr', type=float, default=0.001)
+parser.add_argument('--lr', type=float, default=0.003)
 parser.add_argument('--num_layer', type=int, default=1)
 parser.add_argument('--num_class', type=int, default=3)
 
@@ -54,10 +55,13 @@ norm_src = SourceField(tokenize=tokenize)
 norm_tgt = TargetField(tokenize=tokenize)
 class_src = SourceField(tokenize=tokenize)
 class_tgt = SourceField(tokenize=tokenize)
-max_len = 50  # the max length of a sentence
+max_len = 60  # the max length of a sentence
 
-def len_filter(example):
+def norm_len_filter(example):
     return len(example.norm_src) <= max_len and len(example.norm_tgt) <= max_len
+
+def class_len_filter(example):
+    return len(example.class_src) <= max_len
 
 train = None
 dev = None
@@ -65,57 +69,58 @@ norm_input_vocab = None
 norm_output_vocab = None
 multi_task = None
 optimizer = None
+loss = None
 
 if opt.load_checkpoint is not None:
     train = torchtext.data.TabularDataset(
         path=opt.train_path, format='csv',
-        fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt), ('class_src', class_src), ('class_tgt', class_tgt)],
-        filter_pred=len_filter
+        fields=[('class_src', class_src), ('class_tgt', class_tgt)],
+        filter_pred=class_len_filter
     )
     dev = torchtext.data.TabularDataset(
         path=opt.dev_path, format='csv',
-        fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt), ('class_src', class_src), ('class_tgt', class_tgt)],
-        filter_pred=len_filter
+        fields=[('class_src', class_src), ('class_tgt', class_tgt)],
+        filter_pred=class_len_filter
     )
-    test = torchtext.data.TabularDataset(
-        path=opt.test_path, format='csv',
-        fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt), ('class_src', class_src), ('class_tgt', class_tgt)],
-        filter_pred=len_filter
-    )
+    # test1 = torchtext.data.TabularDataset(
+    #     path=opt.test1_path, format='csv',
+    #     fields=[('class_src', class_src), ('class_tgt', class_tgt)],
+    #     filter_pred=class_len_filter
+    # )
     logging.info("loading checkpoint from {}".format(os.path.join(opt.expt_dir, Checkpoint.CHECKPOINT_DIR_NAME, opt.load_checkpoint)))
     checkpoint_path = os.path.join(opt.expt_dir, Checkpoint.CHECKPOINT_DIR_NAME, opt.load_checkpoint)
     checkpoint = Checkpoint.load(checkpoint_path)
     multi_task = checkpoint.model
-    train.fields[seq2seq.norm_src_field_name].vocab = checkpoint.input_vocab
-    dev.fields[seq2seq.norm_tgt_field_name].vocab = checkpoint.output_vocab
+    train.fields[seq2seq.class_src_field_name].vocab = checkpoint.input_vocab
+    dev.fields[seq2seq.class_src_field_name].vocab = checkpoint.input_vocab
+    # test1.fields[seq2seq.class_src_field_name].vocab = checkpoint.input_vocab
+    # class_src.build_vocab(train)
+    class_tgt.build_vocab(train)
 
-    class_src.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
-    class_tgt.build_vocab(train, max_size=10)
-
-    weight = torch.ones(len(norm_tgt.vocab))
-    pad = norm_tgt.vocab.stoi[norm_tgt.pad_token]
-    loss = Perplexity(weight, pad)
-    if torch.cuda.is_available():
-        loss.cuda()
+    # weight = torch.ones(len(class_tgt.vocab))
+    # pad = norm_tgt.vocab.stoi[norm_tgt.pad_token]
+    # loss = Perplexity(weight, pad)
+    # if torch.cuda.is_available():
+    #     loss.cuda()
 
 else:
     train = torchtext.data.TabularDataset(
         path=opt.train_path, format='csv',
         fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt)],
-        filter_pred=len_filter
+        filter_pred=norm_len_filter
     )
     dev = torchtext.data.TabularDataset(
         path=opt.dev_path, format='csv',
         fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt)],
-        filter_pred=len_filter
+        filter_pred=norm_len_filter
     )
-    test = torchtext.data.TabularDataset(
-        path=opt.test_path, format='csv',
-        fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt)],
-        filter_pred=len_filter
-    )
-    norm_src.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
-    norm_tgt.build_vocab(train, max_size=200000, vectors='glove.twitter.27B.100d')
+    # test = torchtext.data.TabularDataset(
+    #     path=opt.test_path, format='csv',
+    #     fields=[('norm_src', norm_src), ('norm_tgt', norm_tgt)],
+    #     filter_pred=norm_len_filter
+    # )
+    norm_src.build_vocab(train, vectors='glove.twitter.27B.100d')
+    norm_tgt.build_vocab(train, vectors='glove.twitter.27B.100d')
 
     norm_input_vocab = norm_src.vocab
     norm_output_vocab = norm_tgt.vocab
@@ -150,7 +155,7 @@ if torch.cuda.is_available():
         multi_task.cuda()
 
 # train
-t = MultiTaskTrainer(loss=loss, batch_size=40,
+t = MultiTaskTrainer(loss=loss, batch_size=15,
                      checkpoint_every=100,
                      print_every=200, expt_dir=opt.expt_dir)
 
